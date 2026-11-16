@@ -21,9 +21,13 @@ Status SplitProgram::GenerateShaderCode(ShaderHelper& shader) const {
   // Splitting along `axis` cuts the input into `outer` identical blocks of `total_segment_elements`,
   // and each output takes one contiguous run out of every block. So the flat offset alone decides
   // both which output an element belongs to and where it lands, with no indices arithmetic.
-  shader.MainFunctionBody() << shader.GuardAgainstOutOfBoundsWorkgroupSizes("uniforms.input_size")
-                            << "  let outer_index = global_idx / uniforms.total_segment_elements;\n"
-                            << "  let within_outer = global_idx % uniforms.total_segment_elements;\n"
+  // A program covers a group of consecutive outputs, which take the run of `group_elements` starting at
+  // `group_start` in every block.
+  shader.MainFunctionBody() << shader.GuardAgainstOutOfBoundsWorkgroupSizes("uniforms.output_size")
+                            << "  let outer_index = global_idx / uniforms.group_elements;\n"
+                            << "  let within_outer = global_idx % uniforms.group_elements;\n"
+                            << "  let input_offset = outer_index * uniforms.total_segment_elements + "
+                               "uniforms.group_start + within_outer;\n"
                             << "  var segment_start = 0u;\n";
 
   for (size_t i = 0; i < output_count_; ++i) {
@@ -34,7 +38,7 @@ Status SplitProgram::GenerateShaderCode(ShaderHelper& shader) const {
         << "    if (within_outer < segment_start + segment_size) {\n"
         << "      "
         << outputs[i]->SetByOffset("outer_index * segment_size + within_outer - segment_start",
-                                   input.GetByOffset("global_idx"))
+                                   input.GetByOffset("input_offset"))
         << "\n"
         << "      return;\n"
         << "    }\n"
@@ -124,19 +128,35 @@ Status Split::ComputeInternal(ComputeContext& context) const {
   }
 
   const uint32_t element_count = input_size / components;
+  const uint32_t outer_count = element_count / total_segment_elements;
 
-  SplitProgram program{non_empty_output_indices.size()};
-  program.AddInput({input, ProgramTensorMetadataDependency::Type, TensorShape({element_count}), components});
-  for (int output_idx : non_empty_output_indices) {
-    Tensor* output = all_outputs[output_idx];
-    program.AddOutput({output, ProgramTensorMetadataDependency::Type,
-                       TensorShape({output->Shape().Size() / components}), components});
+  // Each output is its own storage buffer binding, plus one for the input, so outputs beyond the
+  // device limit go to further programs.
+  const size_t max_outputs_per_program = context.DeviceLimits().maxStorageBuffersPerShaderStage - 1;
+  uint32_t group_start = 0;
+  for (size_t first = 0; first < non_empty_output_indices.size(); first += max_outputs_per_program) {
+    const size_t count = std::min(max_outputs_per_program, non_empty_output_indices.size() - first);
+    uint32_t group_elements = 0;
+    for (size_t i = first; i < first + count; ++i) {
+      group_elements += segment_sizes[i];
+    }
+    const uint32_t output_size = outer_count * group_elements;
+
+    SplitProgram program{count};
+    program.AddInput({input, ProgramTensorMetadataDependency::Type, TensorShape({element_count}), components});
+    for (size_t i = first; i < first + count; ++i) {
+      Tensor* output = all_outputs[non_empty_output_indices[i]];
+      program.AddOutput({output, ProgramTensorMetadataDependency::Type,
+                         TensorShape({output->Shape().Size() / components}), components});
+    }
+    program.SetDispatchGroupSize((output_size + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE)
+        .CacheHint(count, components)
+        .AddUniformVariables({output_size, total_segment_elements, group_start, group_elements,
+                              gsl::span<const uint32_t>(segment_sizes.data() + first, count)});
+    ORT_RETURN_IF_ERROR(context.RunProgram(program));
+    group_start += group_elements;
   }
-  program.SetDispatchGroupSize((element_count + WORKGROUP_SIZE - 1) / WORKGROUP_SIZE)
-      .CacheHint(non_empty_output_indices.size(), components)
-      .AddUniformVariables({element_count, total_segment_elements,
-                            gsl::span<const uint32_t>(segment_sizes.data(), segment_sizes.size())});
-  return context.RunProgram(program);
+  return Status::OK();
 }
 
 #define WEBGPU_SPLIT_KERNEL(OP_TYPE, VERSION, KERNEL_CLASS, TYPE)                                         \

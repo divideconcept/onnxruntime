@@ -62,7 +62,7 @@ Status SoftmaxProgram::GenerateShaderCode(ShaderHelper& shader) const {
   // Add input and output variables
   const auto& input = shader.AddInput("x", ShaderUsage::UseUniform | ShaderUsage::UseIndicesTypeAlias |
                                                ShaderUsage::UseValueTypeAlias | ShaderUsage::UseElementTypeAlias);
-  shader.AddOutput("result", ShaderUsage::UseUniform | ShaderUsage::UseIndicesTypeAlias);
+  const auto& output = shader.AddOutput("result", ShaderUsage::UseUniform | ShaderUsage::UseIndicesTypeAlias);
   int components = input.NumComponents();
 
   const std::string thread_max_scalar_decl = is_fp32_
@@ -76,15 +76,16 @@ Status SoftmaxProgram::GenerateShaderCode(ShaderHelper& shader) const {
       << "var<workgroup> thread_max_scalar_shared : array<x_element_t, " << wg_ << ">;\n"
       << "var<workgroup> thread_sum_scalar_shared : array<x_element_t, " << wg_ << ">;\n";
 
-  // Define helper functions to get and set values
+  // Tensors over maxStorageBufferBindingSize are bound as several segments, which the by-offset
+  // accessors handle, so the buffers must not be indexed directly.
   shader.AdditionalImplementation()
       << "fn getValue(row: i32, col: i32, row_stride: i32) -> x_value_t {\n"
-      << "  let index = row * row_stride + col;\n"
-      << "  return x[index];\n"
+      << "  let index = u32(row) * u32(row_stride) + u32(col);\n"
+      << "  return " << input.GetByOffset("index") << ";\n"
       << "}\n"
       << "fn setValue(row: i32, col: i32, row_stride: i32, value: x_value_t) {\n"
-      << "  let index = row * row_stride + col;\n"
-      << "  result[index] = value;\n"
+      << "  let index = u32(row) * u32(row_stride) + u32(col);\n"
+      << "  " << output.SetByOffset("index", "value") << "\n"
       << "}\n";
 
   // Main function body

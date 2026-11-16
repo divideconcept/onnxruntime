@@ -17,8 +17,10 @@ class SplitProgram final : public Program<SplitProgram> {
 
   Status GenerateShaderCode(ShaderHelper& sh) const override;
 
-  WEBGPU_PROGRAM_DEFINE_UNIFORM_VARIABLES({"input_size", ProgramUniformVariableDataType::Uint32},
+  WEBGPU_PROGRAM_DEFINE_UNIFORM_VARIABLES({"output_size", ProgramUniformVariableDataType::Uint32},
                                           {"total_segment_elements", ProgramUniformVariableDataType::Uint32},
+                                          {"group_start", ProgramUniformVariableDataType::Uint32},
+                                          {"group_elements", ProgramUniformVariableDataType::Uint32},
                                           {"segment_sizes", ProgramUniformVariableDataType::Uint32});
 
  private:

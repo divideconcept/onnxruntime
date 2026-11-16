@@ -178,6 +178,45 @@ TEST(SplitOperatorTest, EqualSized33OutputsCuda) {
 }
 #endif
 
+// More outputs than a single shader can bind as storage buffers (16 per stage is common), with unequal and
+// empty splits along a middle axis, so a kernel that splits the outputs over several programs must keep
+// each group's offset into the input.
+TEST(SplitOperatorTest, Axis1ManyUnequalOutputs) {
+  constexpr int64_t kOutputCount = 40;
+  constexpr int64_t kOuter = 2;
+  constexpr int64_t kInner = 3;
+  const std::vector<int64_t> pattern{1, 2, 0, 3};
+
+  std::vector<int64_t> split_sizes;
+  std::vector<int64_t> split_starts;
+  int64_t axis_dim = 0;
+  for (int64_t i = 0; i < kOutputCount; ++i) {
+    split_starts.push_back(axis_dim);
+    split_sizes.push_back(pattern[i % pattern.size()]);
+    axis_dim += split_sizes.back();
+  }
+
+  std::vector<float> input(kOuter * axis_dim * kInner);
+  for (size_t i = 0; i < input.size(); ++i) {
+    input[i] = static_cast<float>(i);
+  }
+
+  OpTester test("Split", 13);
+  test.AddAttribute("axis", int64_t{1});
+  test.AddInput<float>("input", {kOuter, axis_dim, kInner}, input);
+  test.AddInput<int64_t>("split", {kOutputCount}, split_sizes, true);
+  for (int64_t i = 0; i < kOutputCount; ++i) {
+    std::vector<float> expected;
+    for (int64_t o = 0; o < kOuter; ++o) {
+      const auto begin = input.begin() + (o * axis_dim + split_starts[i]) * kInner;
+      expected.insert(expected.end(), begin, begin + split_sizes[i] * kInner);
+    }
+    test.AddOutput<float>(MakeString("output", i).c_str(), {kOuter, split_sizes[i], kInner}, expected);
+  }
+  test.Run(OpTester::ExpectResult::kExpectSuccess, "",
+           {kTensorrtExecutionProvider, kQnnExecutionProvider, kCoreMLExecutionProvider, kDmlExecutionProvider});
+}
+
 TEST(SplitOperatorTest, Axis0UnequalSplitFloat) {
   constexpr int64_t axis = 0;
   std::vector<ShapeAndFloatData> outputs;

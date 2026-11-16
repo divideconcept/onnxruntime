@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License.
 
+#include <algorithm>
 #include <cmath>
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
@@ -9,6 +10,7 @@
 #include "test/providers/provider_test_utils.h"
 #include "test/common/cuda_op_test_utils.h"
 #include "test/common/dnnl_op_test_utils.h"
+#include "test/util/include/default_providers.h"
 
 namespace onnxruntime {
 namespace test {
@@ -422,6 +424,46 @@ TEST(SoftmaxOperator, GH15949_regression_test) {
   // disable TRT as it does not support axis=0 as used by the model
   tester.Run(OpTester::ExpectResult::kExpectSuccess, "", {kTensorrtExecutionProvider});
 }
+
+#if defined(USE_WEBGPU)
+// Tensors larger than maxStorageBufferBindingSize (2 GiB on some backends) are bound as several segments.
+// An artificially small limit makes this small input span several segments, with rows straddling the
+// segment boundaries, on both the last-axis path and the transposed path.
+TEST(SoftmaxOperator, WebGpuSegmentedStorageBuffers) {
+  constexpr int64_t kRows = 32;
+  constexpr int64_t kCols = 60;
+  std::vector<float> x(kRows * kCols);
+  for (size_t i = 0; i < x.size(); ++i) {
+    x[i] = static_cast<float>((i * 37) % 23) * 0.25f - 2.5f;
+  }
+
+  for (const int64_t axis : {int64_t{-1}, int64_t{0}}) {
+    std::vector<float> y(x.size());
+    const int64_t outer = axis == -1 ? kRows : kCols;
+    const int64_t len = axis == -1 ? kCols : kRows;
+    const auto at = [&](int64_t o, int64_t k) { return axis == -1 ? o * kCols + k : k * kCols + o; };
+    for (int64_t o = 0; o < outer; ++o) {
+      float max_value = x[at(o, 0)];
+      for (int64_t k = 1; k < len; ++k) max_value = std::max(max_value, x[at(o, k)]);
+      float sum = 0.f;
+      for (int64_t k = 0; k < len; ++k) sum += std::exp(x[at(o, k)] - max_value);
+      for (int64_t k = 0; k < len; ++k) y[at(o, k)] = std::exp(x[at(o, k)] - max_value) / sum;
+    }
+
+    WebGpuExecutionProviderTestOptions options{};
+    options.max_storage_buffer_binding_size = 2048;  // 7680-byte tensors -> 4 segments each
+    auto provider = WebGpuExecutionProviderWithTestOptions(options);
+    if (!provider) {
+      GTEST_SKIP() << "Artificial storage limits require the native test factory.";
+    }
+    OpTester test("Softmax", 13);
+    test.AddAttribute("axis", axis);
+    test.AddInput<float>("X", {kRows, kCols}, x);
+    test.AddOutput<float>("Y", {kRows, kCols}, y);
+    test.ConfigEp(std::move(provider)).RunWithConfig();
+  }
+}
+#endif
 
 }  // namespace test
 }  // namespace onnxruntime

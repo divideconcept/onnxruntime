@@ -130,16 +130,32 @@ Status Split::ComputeInternal(ComputeContext& context) const {
   const uint32_t element_count = input_size / components;
   const uint32_t outer_count = element_count / total_segment_elements;
 
-  // Each output is its own storage buffer binding, plus one for the input, so outputs beyond the
-  // device limit go to further programs.
-  const size_t max_outputs_per_program = context.DeviceLimits().maxStorageBuffersPerShaderStage - 1;
+  // Every program binds the input and a group of outputs. A tensor larger than maxStorageBufferBindingSize takes
+  // one storage buffer binding per segment, so groups are packed by segment count to fit the per-stage limit.
+  const auto& limits = context.DeviceLimits();
+  const uint64_t max_binding_size = limits.maxStorageBufferBindingSize;
+  const auto binding_count = [max_binding_size](const Tensor& tensor) -> uint64_t {
+    const uint64_t bytes = tensor.SizeInBytes();
+    return bytes > max_binding_size ? (bytes + max_binding_size - 1) / max_binding_size : 1;
+  };
+  const uint64_t max_bindings = limits.maxStorageBuffersPerShaderStage;
+  const uint64_t input_bindings = binding_count(*input);
+
   uint32_t group_start = 0;
-  for (size_t first = 0; first < non_empty_output_indices.size(); first += max_outputs_per_program) {
-    const size_t count = std::min(max_outputs_per_program, non_empty_output_indices.size() - first);
+  for (size_t first = 0, count = 0; first < non_empty_output_indices.size(); first += count) {
+    uint64_t bindings = input_bindings;
     uint32_t group_elements = 0;
-    for (size_t i = first; i < first + count; ++i) {
-      group_elements += segment_sizes[i];
+    for (count = 0; first + count < non_empty_output_indices.size(); ++count) {
+      const uint64_t output_bindings = binding_count(*all_outputs[non_empty_output_indices[first + count]]);
+      if (bindings + output_bindings > max_bindings) {
+        break;
+      }
+      bindings += output_bindings;
+      group_elements += segment_sizes[first + count];
     }
+    ORT_RETURN_IF(count == 0, "Split input and output need ", input_bindings, " + ",
+                  binding_count(*all_outputs[non_empty_output_indices[first]]),
+                  " storage buffer bindings, exceeding maxStorageBuffersPerShaderStage (", max_bindings, ").");
     const uint32_t output_size = outer_count * group_elements;
 
     SplitProgram program{count};

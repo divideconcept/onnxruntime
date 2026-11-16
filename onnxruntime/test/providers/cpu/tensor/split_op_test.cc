@@ -7,7 +7,12 @@
 #include "core/framework/to_tensor_proto_element_type.h"
 #include "test/providers/provider_test_utils.h"
 #include "test/common/tensor_op_test_utils.h"
+#include "test/util/include/asserts.h"
 #include "test/util/include/default_providers.h"
+
+#if defined(USE_WEBGPU)
+#include "core/providers/webgpu/webgpu_provider_options.h"
+#endif
 
 namespace onnxruntime {
 namespace test {
@@ -178,13 +183,12 @@ TEST(SplitOperatorTest, EqualSized33OutputsCuda) {
 }
 #endif
 
-// More outputs than a single shader can bind as storage buffers (16 per stage is common), with unequal and
-// empty splits along a middle axis, so a kernel that splits the outputs over several programs must keep
-// each group's offset into the input.
-TEST(SplitOperatorTest, Axis1ManyUnequalOutputs) {
+// Splits a {2, axis_dim, inner} input into 40 outputs with unequal and empty sizes along the middle axis.
+// With enough outputs, the WebGPU kernel spreads them over several programs, each of which must keep its
+// group's offset into the input.
+static void RunManyUnequalOutputsTest(int64_t inner, std::unique_ptr<IExecutionProvider> provider = nullptr) {
   constexpr int64_t kOutputCount = 40;
   constexpr int64_t kOuter = 2;
-  constexpr int64_t kInner = 3;
   const std::vector<int64_t> pattern{1, 2, 0, 3};
 
   std::vector<int64_t> split_sizes;
@@ -196,26 +200,62 @@ TEST(SplitOperatorTest, Axis1ManyUnequalOutputs) {
     axis_dim += split_sizes.back();
   }
 
-  std::vector<float> input(kOuter * axis_dim * kInner);
+  std::vector<float> input(kOuter * axis_dim * inner);
   for (size_t i = 0; i < input.size(); ++i) {
     input[i] = static_cast<float>(i);
   }
 
   OpTester test("Split", 13);
   test.AddAttribute("axis", int64_t{1});
-  test.AddInput<float>("input", {kOuter, axis_dim, kInner}, input);
+  test.AddInput<float>("input", {kOuter, axis_dim, inner}, input);
   test.AddInput<int64_t>("split", {kOutputCount}, split_sizes, true);
   for (int64_t i = 0; i < kOutputCount; ++i) {
     std::vector<float> expected;
     for (int64_t o = 0; o < kOuter; ++o) {
-      const auto begin = input.begin() + (o * axis_dim + split_starts[i]) * kInner;
-      expected.insert(expected.end(), begin, begin + split_sizes[i] * kInner);
+      const auto begin = input.begin() + (o * axis_dim + split_starts[i]) * inner;
+      expected.insert(expected.end(), begin, begin + split_sizes[i] * inner);
     }
-    test.AddOutput<float>(MakeString("output", i).c_str(), {kOuter, split_sizes[i], kInner}, expected);
+    test.AddOutput<float>(MakeString("output", i).c_str(), {kOuter, split_sizes[i], inner}, expected);
   }
-  test.Run(OpTester::ExpectResult::kExpectSuccess, "",
-           {kTensorrtExecutionProvider, kQnnExecutionProvider, kCoreMLExecutionProvider, kDmlExecutionProvider});
+  if (provider) {
+    test.ConfigEp(std::move(provider)).RunWithConfig();
+  } else {
+    test.Run(OpTester::ExpectResult::kExpectSuccess, "",
+             {kTensorrtExecutionProvider, kQnnExecutionProvider, kCoreMLExecutionProvider, kDmlExecutionProvider});
+  }
 }
+
+TEST(SplitOperatorTest, Axis1ManyUnequalOutputs) {
+  RunManyUnequalOutputsTest(3);
+}
+
+#if defined(USE_WEBGPU)
+// 30 non-empty outputs against a limit of 8 storage buffers per stage: 5 programs of 7 outputs or fewer,
+// whatever the adapter's own limit.
+TEST(SplitOperatorTest, WebGpuManyOutputsLowBindingLimit) {
+  ConfigOptions config_options;
+  ASSERT_STATUS_OK(config_options.AddConfigEntry(webgpu::options::kMaxStorageBuffersPerShaderStage, "8"));
+  auto provider = WebGpuExecutionProviderWithOptions(config_options);
+  if (!provider) {
+    GTEST_SKIP() << "WebGPU EP is not available.";
+  }
+  RunManyUnequalOutputsTest(3, std::move(provider));
+}
+
+// A 3840-byte input bound as 4 segments of 1024 bytes takes 4 of the 8 bindings, which leaves room for 4
+// outputs per program.
+TEST(SplitOperatorTest, WebGpuManyOutputsSegmentedInput) {
+  ConfigOptions config_options;
+  ASSERT_STATUS_OK(config_options.AddConfigEntry(webgpu::options::kMaxStorageBuffersPerShaderStage, "8"));
+  WebGpuExecutionProviderTestOptions test_options{};
+  test_options.max_storage_buffer_binding_size = 1024;
+  auto provider = WebGpuExecutionProviderWithTestOptions(config_options, test_options);
+  if (!provider) {
+    GTEST_SKIP() << "Artificial storage limits require the native test factory.";
+  }
+  RunManyUnequalOutputsTest(8, std::move(provider));
+}
+#endif
 
 TEST(SplitOperatorTest, Axis0UnequalSplitFloat) {
   constexpr int64_t axis = 0;

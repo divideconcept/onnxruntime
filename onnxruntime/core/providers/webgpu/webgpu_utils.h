@@ -31,6 +31,12 @@ inline T CeilDiv(T numerator, T denominator) {
   return numerator / denominator + (numerator % denominator != 0);
 }
 
+// Number of storage buffer bindings a tensor of `size_in_bytes` takes: tensors larger than
+// `max_binding_size` are bound as several segments.
+inline uint32_t GetStorageBufferSegmentCount(uint64_t size_in_bytes, uint64_t max_binding_size) {
+  return size_in_bytes > max_binding_size ? static_cast<uint32_t>(CeilDiv(size_in_bytes, max_binding_size)) : 1;
+}
+
 /**
  * Returns the maximum number of components `N` to be used as `vecN` for the given size.
  */

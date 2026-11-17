@@ -88,8 +88,12 @@ Status SoftmaxProgram::GenerateShaderCode(ShaderHelper& shader) const {
       << "  " << output.SetByOffset("index", "value") << "\n"
       << "}\n";
 
-  // Main function body
+  // Each workgroup handles one row. Large dispatches are reshaped into several dimensions, which can add
+  // workgroups past the last row, so the whole workgroup leaves before any access or barrier.
   shader.MainFunctionBody()
+      << "  if (workgroup_idx >= uniforms.rows) {\n"
+      << "    return;\n"
+      << "  }\n"
       << "  let gindex = i32(global_idx);\n"
       << "  let lindex = i32(local_idx);\n"
       << "  const wg = " << wg_ << ";\n"
@@ -200,7 +204,7 @@ Status Softmax::ComputeInternal(ComputeContext& context) const {
       .CacheHint(std::to_string(components), std::to_string(workgroup_size))
       .SetWorkgroupSize(workgroup_size)
       .SetDispatchGroupSize(static_cast<uint32_t>(rows))
-      .AddUniformVariables({{static_cast<int32_t>(packed_cols)}});
+      .AddUniformVariables({{static_cast<int32_t>(packed_cols)}, {static_cast<uint32_t>(rows)}});
 
   ORT_RETURN_IF_ERROR(context.RunProgram(program));
 

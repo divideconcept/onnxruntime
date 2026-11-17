@@ -463,6 +463,36 @@ TEST(SoftmaxOperator, WebGpuSegmentedStorageBuffers) {
     test.ConfigEp(std::move(provider)).RunWithConfig();
   }
 }
+
+// More rows than maxComputeWorkgroupsPerDimension (65535), so the one-workgroup-per-row dispatch is reshaped
+// into two dimensions with spare workgroups, on segmented buffers.
+TEST(SoftmaxOperator, WebGpuManyRowsSegmentedStorageBuffers) {
+  constexpr int64_t kRows = 70000;
+  constexpr int64_t kCols = 8;
+  std::vector<float> x(kRows * kCols);
+  std::vector<float> y(x.size());
+  for (int64_t r = 0; r < kRows; ++r) {
+    float sum = 0.f;
+    for (int64_t c = 0; c < kCols; ++c) {
+      x[r * kCols + c] = static_cast<float>((r * 7 + c * 3) % 11) * 0.5f - 2.f;
+      sum += std::exp(x[r * kCols + c]);
+    }
+    for (int64_t c = 0; c < kCols; ++c) {
+      y[r * kCols + c] = std::exp(x[r * kCols + c]) / sum;
+    }
+  }
+
+  WebGpuExecutionProviderTestOptions options{};
+  options.max_storage_buffer_binding_size = 1 << 20;  // 2240000-byte tensors -> 3 segments each
+  auto provider = WebGpuExecutionProviderWithTestOptions(options);
+  if (!provider) {
+    GTEST_SKIP() << "Artificial storage limits require the native test factory.";
+  }
+  OpTester test("Softmax", 13);
+  test.AddInput<float>("X", {kRows, kCols}, x);
+  test.AddOutput<float>("Y", {kRows, kCols}, y);
+  test.ConfigEp(std::move(provider)).RunWithConfig();
+}
 #endif
 
 }  // namespace test

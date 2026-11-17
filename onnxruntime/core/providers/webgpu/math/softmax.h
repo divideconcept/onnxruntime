@@ -44,7 +44,8 @@ class SoftmaxProgram final : public Program<SoftmaxProgram> {
 
   Status GenerateShaderCode(ShaderHelper& sh) const override;
 
-  WEBGPU_PROGRAM_DEFINE_UNIFORM_VARIABLES({"packedCols", ProgramUniformVariableDataType::Int32});
+  WEBGPU_PROGRAM_DEFINE_UNIFORM_VARIABLES({"packedCols", ProgramUniformVariableDataType::Int32},
+                                          {"rows", ProgramUniformVariableDataType::Uint32});
 
  private:
   uint32_t wg_;

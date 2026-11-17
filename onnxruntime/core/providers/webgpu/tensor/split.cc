@@ -4,6 +4,7 @@
 #include "core/providers/webgpu/tensor/split.h"
 #include "core/providers/webgpu/shader_helper.h"
 #include "core/providers/webgpu/webgpu_supported_types.h"
+#include "core/providers/webgpu/webgpu_utils.h"
 
 namespace onnxruntime {
 namespace webgpu {
@@ -133,10 +134,8 @@ Status Split::ComputeInternal(ComputeContext& context) const {
   // Every program binds the input and a group of outputs. A tensor larger than maxStorageBufferBindingSize takes
   // one storage buffer binding per segment, so groups are packed by segment count to fit the per-stage limit.
   const auto& limits = context.DeviceLimits();
-  const uint64_t max_binding_size = limits.maxStorageBufferBindingSize;
-  const auto binding_count = [max_binding_size](const Tensor& tensor) -> uint64_t {
-    const uint64_t bytes = tensor.SizeInBytes();
-    return bytes > max_binding_size ? (bytes + max_binding_size - 1) / max_binding_size : 1;
+  const auto binding_count = [&limits](const Tensor& tensor) -> uint64_t {
+    return GetStorageBufferSegmentCount(tensor.SizeInBytes(), limits.maxStorageBufferBindingSize);
   };
   const uint64_t max_bindings = limits.maxStorageBuffersPerShaderStage;
   const uint64_t input_bindings = binding_count(*input);

@@ -16,6 +16,7 @@
 #include "core/providers/webgpu/program_manager.h"
 #include "core/providers/webgpu/shader_helper.h"
 #include "core/providers/webgpu/webgpu_context.h"
+#include "core/providers/webgpu/webgpu_utils.h"
 
 namespace onnxruntime {
 namespace webgpu {
@@ -121,11 +122,8 @@ Status ProgramManager::CalculateSegmentsForInputsAndOutputs(const ProgramBase& p
       continue;
     }
     const auto& input = program.Inputs()[i];
-    inputs_segments[i] = 1;
-    if (input.tensor && input.tensor->SizeInBytes() > maxStorageBufferBindingSize) {
-      uint32_t segments = static_cast<uint32_t>((input.tensor->SizeInBytes() + maxStorageBufferBindingSize - 1) / maxStorageBufferBindingSize);
-      inputs_segments[i] = segments;
-    }
+    inputs_segments[i] =
+        input.tensor ? GetStorageBufferSegmentCount(input.tensor->SizeInBytes(), maxStorageBufferBindingSize) : 1;
   }
   // Outputs
   for (size_t i = 0; i < program.Outputs().size(); ++i) {
@@ -133,11 +131,8 @@ Status ProgramManager::CalculateSegmentsForInputsAndOutputs(const ProgramBase& p
       continue;
     }
     const auto& output = program.Outputs()[i];
-    outputs_segments[i] = 1;
-    if (output.tensor && output.tensor->SizeInBytes() > maxStorageBufferBindingSize) {
-      uint32_t segments = static_cast<uint32_t>((output.tensor->SizeInBytes() + maxStorageBufferBindingSize - 1) / maxStorageBufferBindingSize);
-      outputs_segments[i] = segments;
-    }
+    outputs_segments[i] =
+        output.tensor ? GetStorageBufferSegmentCount(output.tensor->SizeInBytes(), maxStorageBufferBindingSize) : 1;
   }
   return Status::OK();
 }

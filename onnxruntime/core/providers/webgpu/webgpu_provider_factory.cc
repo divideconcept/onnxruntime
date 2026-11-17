@@ -554,6 +554,7 @@ static std::shared_ptr<IExecutionProviderFactory> CreateWebGpuProviderFactory(
   WebGpuContextConfig config =
       ParseWebGpuContextConfig(config_options, weight_load_acceleration_mode);
   config.test_only_max_storage_buffer_binding_size = test_options.max_storage_buffer_binding_size;
+  config.test_only_max_compute_workgroups_per_dimension = test_options.max_compute_workgroups_per_dimension;
 
   // Load the Dawn library and create the WebGPU instance.
   auto& context = WebGpuContextFactory::CreateContext(config);

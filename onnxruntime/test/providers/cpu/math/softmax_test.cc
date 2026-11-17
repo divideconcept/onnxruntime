@@ -464,11 +464,13 @@ TEST(SoftmaxOperator, WebGpuSegmentedStorageBuffers) {
   }
 }
 
-// More rows than maxComputeWorkgroupsPerDimension (65535), so the one-workgroup-per-row dispatch is reshaped
-// into two dimensions with spare workgroups, on segmented buffers.
-TEST(SoftmaxOperator, WebGpuManyRowsSegmentedStorageBuffers) {
-  constexpr int64_t kRows = 70000;
-  constexpr int64_t kCols = 8;
+// One workgroup per row: 85 rows with at most 16 workgroups per dimension are dispatched as 10 x 10, so 15
+// workgroups have no row. With 256-byte bindings each 1020-byte tensor takes 4 segments, and the offsets of those
+// extra rows select a nonexistent fifth segment, which the accessors wrap to the start of the first buffer. Without
+// the row guard they would overwrite the first rows' results.
+TEST(SoftmaxOperator, WebGpuSpareWorkgroupsSegmentedStorageBuffers) {
+  constexpr int64_t kRows = 85;
+  constexpr int64_t kCols = 3;
   std::vector<float> x(kRows * kCols);
   std::vector<float> y(x.size());
   for (int64_t r = 0; r < kRows; ++r) {
@@ -483,10 +485,11 @@ TEST(SoftmaxOperator, WebGpuManyRowsSegmentedStorageBuffers) {
   }
 
   WebGpuExecutionProviderTestOptions options{};
-  options.max_storage_buffer_binding_size = 1 << 20;  // 2240000-byte tensors -> 3 segments each
+  options.max_storage_buffer_binding_size = 256;
+  options.max_compute_workgroups_per_dimension = 16;
   auto provider = WebGpuExecutionProviderWithTestOptions(options);
   if (!provider) {
-    GTEST_SKIP() << "Artificial storage limits require the native test factory.";
+    GTEST_SKIP() << "Artificial device limits require the native test factory.";
   }
   OpTester test("Softmax", 13);
   test.AddInput<float>("X", {kRows, kCols}, x);

@@ -20,6 +20,8 @@ struct ConfigOptions;
 
 struct WebGpuExecutionProviderTestOptions {
   uint64_t max_storage_buffer_binding_size{0};
+  // Caps the workgroups per dispatch dimension, so tests can reach dispatch normalization with small inputs.
+  uint32_t max_compute_workgroups_per_dimension{0};
   std::optional<webgpu::MatMulAlgorithm> forced_matmul_algorithm;
 };
 

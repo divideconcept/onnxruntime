@@ -459,6 +459,11 @@ void WebGpuContext::Initialize(const WebGpuContextConfig& config, bool uses_bund
                   "maxStorageBuffersPerShaderStage exceeds the device limit");
       device_limits_.maxStorageBuffersPerShaderStage = max_storage_buffers_per_shader_stage_;
     }
+    // Test-only logical cap: the device keeps its real limit, only dispatch normalization sees the lower one.
+    if (test_only_max_compute_workgroups_per_dimension_ != 0) {
+      device_limits_.maxComputeWorkgroupsPerDimension =
+          std::min(device_limits_.maxComputeWorkgroupsPerDimension, test_only_max_compute_workgroups_per_dimension_);
+    }
     // Align maxStorageBufferBindingSize down to minStorageBufferOffsetAlignment so that
     // buffer segment offsets are always properly aligned for WebGPU bind group creation.
     if (device_limits_.minStorageBufferOffsetAlignment > 0) {
@@ -1872,7 +1877,8 @@ WebGpuContext& WebGpuContextFactory::CreateContextImpl(const WebGpuContextConfig
                                                                     config.preserve_device,
                                                                     config.max_storage_buffer_binding_size,
                                                                     config.test_only_max_storage_buffer_binding_size,
-                                                                    config.max_storage_buffers_per_shader_stage));
+                                                                    config.max_storage_buffers_per_shader_stage,
+                                                                    config.test_only_max_compute_workgroups_per_dimension));
     it = contexts_->emplace(context_id, WebGpuContextFactory::WebGpuContextInfo{std::move(context), 0}).first;
 #if !defined(__wasm__)
     it->second.dawn_cache_interface = config.dawn_cache_interface;
